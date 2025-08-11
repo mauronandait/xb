@@ -1,0 +1,35 @@
+2025-08-10 21:22:36,173 - root - INFO - Sistema de logging configurado
+2025-08-10 21:22:36,327 - src.database - ERROR - Error conectando a la base de datos: 'utf-8' codec can't decode byte 0xf3 in position 85: invalid continuation byte
+2025-08-10 21:23:24,639 - root - INFO - Sistema de logging configurado
+2025-08-10 21:23:24,681 - src.database - ERROR - Error conectando a la base de datos: 'utf-8' codec can't decode byte 0xf3 in position 85: invalid continuation byte
+2025-08-10 21:23:24,682 - src.data_clean - INFO - Iniciando pipeline de limpieza de datos
+2025-08-10 21:23:24,689 - src.data_clean - INFO - Datos limpios: 2 partidos procesados
+2025-08-10 21:23:24,693 - src.data_clean - INFO - Probabilidades implícitas calculadas
+2025-08-10 21:23:24,695 - src.data_clean - INFO - Características estadísticas agregadas
+2025-08-10 21:23:24,696 - src.data_clean - INFO - Datos de torneos procesados
+2025-08-10 21:23:24,699 - src.data_clean - INFO - Partidos válidos filtrados: 0
+2025-08-10 21:23:24,699 - src.data_clean - INFO - Pipeline de limpieza completado: 0 partidos válidos
+2025-08-10 21:23:24,700 - src.betting_signals - INFO - Generando recomendaciones de apuestas
+2025-08-10 21:23:24,701 - src.betting_signals - INFO - No se detectaron señales de value bet
+2025-08-10 21:27:23,825 - root - INFO - Sistema de logging configurado
+2025-08-10 21:27:23,979 - src.database - ERROR - Error conectando a la base de datos: 'utf-8' codec can't decode byte 0xf3 in position 85: invalid continuation byte
+2025-08-10 21:27:23,980 - src.data_clean - INFO - Iniciando pipeline de limpieza de datos
+2025-08-10 21:27:23,987 - src.data_clean - INFO - Datos limpios: 2 partidos procesados
+2025-08-10 21:27:23,989 - src.data_clean - INFO - Probabilidades implícitas calculadas
+2025-08-10 21:27:23,992 - src.data_clean - INFO - Características estadísticas agregadas
+2025-08-10 21:27:23,993 - src.data_clean - INFO - Datos de torneos procesados
+2025-08-10 21:27:23,995 - src.data_clean - INFO - Partidos válidos filtrados: 0
+2025-08-10 21:27:23,995 - src.data_clean - INFO - Pipeline de limpieza completado: 0 partidos válidos
+2025-08-10 21:27:23,996 - src.betting_signals - INFO - Generando recomendaciones de apuestas
+2025-08-10 21:27:23,996 - src.betting_signals - INFO - No se detectaron señales de value bet
+2025-08-10 21:38:40,274 - root - INFO - Sistema de logging configurado
+2025-08-10 21:38:40,325 - src.database - ERROR - Error conectando a la base de datos: 'utf-8' codec can't decode byte 0xf3 in position 85: invalid continuation byte
+2025-08-10 21:38:40,326 - src.data_clean - INFO - Iniciando pipeline de limpieza de datos
+2025-08-10 21:38:40,340 - src.data_clean - INFO - Datos limpios: 2 partidos procesados
+2025-08-10 21:38:40,342 - src.data_clean - INFO - Probabilidades implícitas calculadas
+2025-08-10 21:38:40,345 - src.data_clean - INFO - Características estadísticas agregadas
+2025-08-10 21:38:40,346 - src.data_clean - INFO - Datos de torneos procesados
+2025-08-10 21:38:40,349 - src.data_clean - INFO - Partidos válidos filtrados: 0
+2025-08-10 21:38:40,350 - src.data_clean - INFO - Pipeline de limpieza completado: 0 partidos válidos
+2025-08-10 21:38:40,351 - src.betting_signals - INFO - Generando recomendaciones de apuestas
+2025-08-10 21:38:40,352 - src.betting_signals - INFO - No se detectaron señales de value bet

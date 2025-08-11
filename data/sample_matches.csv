@@ -1,0 +1,12 @@
+match_id,tournament,player1,player2,match_time,player1_odds,player2_odds,surface,round
+Djokovic_Nadal_Australian_Open_20241201,Australian Open,Novak Djokovic,Rafael Nadal,2024-12-01 15:00:00,1.85,2.10,Hard,Quarter Final
+Federer_Medvedev_Wimbledon_20241202,Wimbledon,Roger Federer,Daniil Medvedev,2024-12-02 14:00:00,2.50,1.60,Grass,Semi Final
+Alcaraz_Sinner_US_Open_20241203,US Open,Carlos Alcaraz,Jannik Sinner,2024-12-03 16:00:00,1.75,2.25,Hard,Final
+Tsitsipas_Zverev_French_Open_20241204,French Open,Stefanos Tsitsipas,Alexander Zverev,2024-12-04 13:00:00,2.15,1.80,Clay,Quarter Final
+Rublev_Khachanov_Miami_Open_20241205,Miami Open,Andrey Rublev,Karen Khachanov,2024-12-05 17:00:00,1.95,1.90,Hard,Round of 16
+Bautista_Agut_De_Minaur_Monte_Carlo_20241206,Monte Carlo Masters,Roberto Bautista Agut,Alex de Minaur,2024-12-06 12:00:00,2.30,1.70,Clay,Round of 32
+Hurkacz_Fritz_Indian_Wells_20241207,Indian Wells,Hubert Hurkacz,Taylor Fritz,2024-12-07 18:00:00,1.65,2.35,Hard,Semi Final
+Ruud_Norrie_Rome_Masters_20241208,Rome Masters,Casper Ruud,Cameron Norrie,2024-12-08 15:30:00,1.55,2.45,Clay,Quarter Final
+Berrettini_Shapovalov_Queen_Club_20241209,Queen's Club,Matteo Berrettini,Denis Shapovalov,2024-12-09 14:15:00,2.05,1.85,Grass,Round of 16
+Monfils_Paire_Lyon_Open_20241210,Lyon Open,Gaël Monfils,Benoît Paire,2024-12-10 16:45:00,1.70,2.20,Clay,Final
+
