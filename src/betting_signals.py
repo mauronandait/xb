@@ -1,331 +1,580 @@
+#!/usr/bin/env python3
 """
-Módulo de detección de señales de apuesta para el sistema de tenis.
-Incluye lógica para identificar value bets, calcular stakes Kelly y generar recomendaciones.
+Sistema de generación de señales de apuestas para tenis.
+Analiza partidos y genera señales de "value betting" basadas en análisis estadístico.
 """
 
+import logging
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Optional, Tuple, Union
-import logging
-from datetime import datetime
-from src.config import config
+from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime, timedelta
+import json
 
+from config import config
+from database import db_manager
+from alerts import send_value_bet_alert
+
+# Configurar logging
 logger = logging.getLogger(__name__)
 
-class BettingSignalDetector:
-    """Clase para detectar señales de apuesta en partidos de tenis."""
+class TennisBettingSignals:
+    """Sistema de generación de señales de apuestas para tenis."""
     
-    def __init__(self, bankroll: float = None, kelly_fraction: float = None):
-        """
-        Inicializar el detector de señales.
-        
-        Args:
-            bankroll: Capital disponible para apuestas
-            kelly_fraction: Fracción del stake Kelly a usar (0-1)
-        """
-        self.bankroll = bankroll or config.BANKROLL
-        self.kelly_fraction = kelly_fraction or config.KELLY_FRACTION
-        self.min_ev_threshold = config.MIN_EV_THRESHOLD
-        self.max_stake_percent = config.MAX_STAKE_PERCENT
+    def __init__(self):
+        """Inicializar generador de señales."""
         self.logger = logging.getLogger(__name__)
         
-    def calculate_expected_value(self, model_prob: float, odds: float) -> float:
-        """
-        Calcular el valor esperado (EV) de una apuesta.
+        # Configuración de señales
+        self.min_ev_threshold = config.MIN_EV_THRESHOLD
+        self.min_kelly_threshold = 0.01
+        self.max_stake_percent = config.MAX_STAKE_PERCENT / 100
+        self.kelly_fraction = config.KELLY_FRACTION
         
-        Args:
-            model_prob: Probabilidad del modelo
-            odds: Cuota ofrecida
-            
-        Returns:
-            Valor esperado como decimal
-        """
-        try:
-            ev = (model_prob * odds) - 1
-            return round(ev, 4)
-        except Exception as e:
-            self.logger.error(f"Error calculando EV: {e}")
-            return 0.0
+        # Umbrales de confianza
+        self.high_confidence_threshold = 0.15
+        self.medium_confidence_threshold = 0.08
+        self.low_confidence_threshold = 0.05
+        
+        # Factores de ponderación
+        self.tournament_weights = {
+            'grand_slam': 1.2,
+            'atp_1000': 1.1,
+            'atp_500': 1.0,
+            'atp_250': 0.9,
+            'challenger': 0.8,
+            'other': 0.7
+        }
+        
+        self.surface_weights = {
+            'hard': 1.0,
+            'clay': 1.0,
+            'grass': 1.0,
+            'carpet': 0.9
+        }
     
-    def calculate_kelly_stake(self, model_prob: float, odds: float) -> float:
+    def generate_betting_signals(self, matches: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Calcular el stake Kelly óptimo.
+        Generar señales de apuestas para una lista de partidos.
         
         Args:
-            model_prob: Probabilidad del modelo
-            odds: Cuota ofrecida
+            matches: Lista de partidos procesados
             
         Returns:
-            Porcentaje del bankroll a apostar (0-1)
+            Lista de señales de apuestas generadas
         """
-        try:
-            if odds <= 1:
-                return 0.0
-            
-            kelly_stake = (model_prob * odds - 1) / (odds - 1)
-            # Aplicar fracción Kelly y limitar al máximo permitido
-            fractional_stake = kelly_stake * self.kelly_fraction
-            max_stake = self.max_stake_percent / 100
-            
-            return max(0.0, min(fractional_stake, max_stake))
-            
-        except Exception as e:
-            self.logger.error(f"Error calculando stake Kelly: {e}")
-            return 0.0
+        if not matches:
+            self.logger.warning("No hay partidos para generar señales")
+            return []
+        
+        self.logger.info(f"Generando señales de apuestas para {len(matches)} partidos")
+        
+        signals = []
+        
+        for match in matches:
+            try:
+                signal = self._analyze_match_for_signals(match)
+                if signal:
+                    signals.append(signal)
+            except Exception as e:
+                self.logger.warning(f"Error analizando partido para señales: {e}")
+                continue
+        
+        # Ordenar señales por confianza y valor esperado
+        signals = self._rank_signals(signals)
+        
+        self.logger.info(f"Señales generadas: {len(signals)} oportunidades identificadas")
+        return signals
     
-    def calculate_recommended_stake(self, kelly_stake: float) -> float:
+    def _analyze_match_for_signals(self, match: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Calcular el stake recomendado en términos monetarios.
+        Analizar un partido individual para generar señales.
         
         Args:
-            kelly_stake: Stake Kelly como porcentaje (0-1)
+            match: Datos del partido
             
         Returns:
-            Cantidad de dinero a apostar
+            Señal de apuesta o None si no hay oportunidad
         """
         try:
-            return round(kelly_stake * self.bankroll, 2)
-        except Exception as e:
-            self.logger.error(f"Error calculando stake recomendado: {e}")
-            return 0.0
-    
-    def detect_value_bets(self, df: pd.DataFrame, model_column: str = 'model_prob') -> pd.DataFrame:
-        """
-        Detectar value bets en un DataFrame de partidos.
-        
-        Args:
-            df: DataFrame con datos de partidos
-            model_column: Nombre de la columna con probabilidades del modelo
+            # Verificar que el partido tenga todos los datos necesarios
+            required_fields = [
+                'player1', 'player2', 'odds', 'player1_implied_prob', 
+                'player2_implied_prob', 'player1_ev', 'player2_ev'
+            ]
             
-        Returns:
-            DataFrame con señales de apuesta detectadas
-        """
-        try:
+            if not all(field in match for field in required_fields):
+                return None
+            
+            # Analizar oportunidades para ambos jugadores
             signals = []
             
-            for _, row in df.iterrows():
-                # Analizar jugador 1
-                if pd.notna(row.get('player1_odds')) and pd.notna(row.get(f'{model_column}_player1')):
-                    ev1 = self.calculate_expected_value(row[f'{model_column}_player1'], row['player1_odds'])
-                    kelly1 = self.calculate_kelly_stake(row[f'{model_column}_player1'], row['player1_odds'])
-                    
-                    if ev1 > self.min_ev_threshold and kelly1 > 0:
-                        signal = {
-                            'match_id': row['match_id'],
-                            'selection': row['player1'],
-                            'opponent': row['player2'],
-                            'tournament': row.get('tournament', 'Unknown'),
-                            'match_time': row['match_time'],
-                            'odds': row['player1_odds'],
-                            'model_prob': row[f'{model_column}_player1'],
-                            'implied_prob': row.get('player1_implied_prob', 1/row['player1_odds']),
-                            'ev': ev1,
-                            'kelly_stake': kelly1,
-                            'recommended_stake': self.calculate_recommended_stake(kelly1),
-                            'selection_type': 'player1'
-                        }
-                        signals.append(signal)
-                
-                # Analizar jugador 2
-                if pd.notna(row.get('player2_odds')) and pd.notna(row.get(f'{model_column}_player2')):
-                    ev2 = self.calculate_expected_value(row[f'{model_column}_player2'], row['player2_odds'])
-                    kelly2 = self.calculate_kelly_stake(row[f'{model_column}_player2'], row['player2_odds'])
-                    
-                    if ev2 > self.min_ev_threshold and kelly2 > 0:
-                        signal = {
-                            'match_id': row['match_id'],
-                            'selection': row['player2'],
-                            'opponent': row['player1'],
-                            'tournament': row.get('tournament', 'Unknown'),
-                            'match_time': row['match_time'],
-                            'odds': row['player2_odds'],
-                            'model_prob': row[f'{model_column}_player2'],
-                            'implied_prob': row.get('player2_implied_prob', 1/row['player2_odds']),
-                            'ev': ev2,
-                            'kelly_stake': kelly2,
-                            'recommended_stake': self.calculate_recommended_stake(kelly2),
-                            'selection_type': 'player2'
-                        }
-                        signals.append(signal)
+            # Analizar jugador 1
+            signal1 = self._analyze_player_opportunity(
+                match, 'player1', match['player1_odds'], 
+                match['player1_implied_prob'], match['player1_ev']
+            )
+            if signal1:
+                signals.append(signal1)
             
+            # Analizar jugador 2
+            signal2 = self._analyze_player_opportunity(
+                match, 'player2', match['player2_odds'], 
+                match['player2_implied_prob'], match['player2_ev']
+            )
+            if signal2:
+                signals.append(signal2)
+            
+            # Si no hay señales individuales, verificar oportunidades de arbitraje
+            if not signals:
+                arbitrage_signal = self._check_arbitrage_opportunity(match)
+                if arbitrage_signal:
+                    signals.append(arbitrage_signal)
+            
+            # Retornar la mejor señal si existe
             if signals:
-                signals_df = pd.DataFrame(signals)
-                # Ordenar por EV descendente
-                signals_df = signals_df.sort_values('ev', ascending=False).reset_index(drop=True)
-                self.logger.info(f"Se detectaron {len(signals_df)} señales de value bet")
-                return signals_df
-            else:
-                self.logger.info("No se detectaron señales de value bet")
-                return pd.DataFrame()
-                
+                return max(signals, key=lambda x: x['confidence_score'])
+            
+            return None
+            
         except Exception as e:
-            self.logger.error(f"Error detectando value bets: {e}")
-            raise
+            self.logger.warning(f"Error analizando partido: {e}")
+            return None
     
-    def filter_signals_by_confidence(self, signals_df: pd.DataFrame, min_confidence: float = 0.7) -> pd.DataFrame:
+    def _analyze_player_opportunity(
+        self, match: Dict[str, Any], player_key: str, 
+        odds: float, implied_prob: float, ev: float
+    ) -> Optional[Dict[str, Any]]:
         """
-        Filtrar señales por nivel de confianza del modelo.
+        Analizar oportunidad de apuesta para un jugador específico.
         
         Args:
-            signals_df: DataFrame con señales de apuesta
-            min_confidence: Confianza mínima requerida (0-1)
+            match: Datos del partido
+            player_key: Clave del jugador ('player1' o 'player2')
+            odds: Cuotas del jugador
+            implied_prob: Probabilidad implícita
+            ev: Valor esperado
             
         Returns:
-            DataFrame filtrado con señales de alta confianza
+            Señal de apuesta o None si no hay oportunidad
         """
         try:
-            if signals_df.empty:
-                return signals_df
+            # Verificar umbral mínimo de valor esperado
+            if ev < self.min_ev_threshold:
+                return None
             
-            # Filtrar por confianza del modelo
-            high_confidence = signals_df[
-                (signals_df['model_prob'] >= min_confidence) | 
-                (signals_df['model_prob'] <= (1 - min_confidence))
-            ].copy()
+            # Calcular Kelly Criterion
+            kelly = ev / (odds - 1) if ev > 0 else 0
             
-            # Agregar columna de confianza
-            high_confidence['confidence'] = high_confidence['model_prob'].apply(
-                lambda x: max(x, 1-x)
+            # Verificar umbral mínimo de Kelly
+            if kelly < self.min_kelly_threshold:
+                return None
+            
+            # Calcular stake recomendado
+            recommended_stake = min(kelly * self.kelly_fraction, self.max_stake_percent)
+            
+            # Calcular puntuación de confianza
+            confidence_score = self._calculate_confidence_score(
+                match, ev, kelly, implied_prob
             )
             
-            self.logger.info(f"Señales filtradas por confianza: {len(high_confidence)} de {len(signals_df)}")
-            return high_confidence
+            # Determinar nivel de confianza
+            confidence_level = self._determine_confidence_level(confidence_score)
+            
+            # Generar señal
+            signal = {
+                'match_id': match.get('match_id', f"{match['player1']}_{match['player2']}"),
+                'tournament': match['tournament'],
+                'player1': match['player1'],
+                'player2': match['player2'],
+                'match_time': match.get('match_time'),
+                'surface': match.get('surface', 'hard'),
+                'round': match.get('round', 'Ronda'),
+                'recommended_bet': player_key,
+                'player_name': match[player_key],
+                'odds': odds,
+                'implied_probability': implied_prob,
+                'expected_value': ev,
+                'kelly_criterion': kelly,
+                'recommended_stake': recommended_stake,
+                'confidence_score': confidence_score,
+                'confidence_level': confidence_level,
+                'signal_type': 'value_bet',
+                'generated_at': datetime.utcnow(),
+                'match_data': match
+            }
+            
+            return signal
             
         except Exception as e:
-            self.logger.error(f"Error filtrando por confianza: {e}")
-            raise
+            self.logger.warning(f"Error analizando oportunidad del jugador: {e}")
+            return None
     
-    def calculate_portfolio_metrics(self, signals_df: pd.DataFrame) -> Dict[str, float]:
+    def _check_arbitrage_opportunity(self, match: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Calcular métricas del portafolio de apuestas.
+        Verificar si existe oportunidad de arbitraje.
         
         Args:
-            signals_df: DataFrame con señales de apuesta
+            match: Datos del partido
             
         Returns:
-            Diccionario con métricas del portafolio
+            Señal de arbitraje o None si no hay oportunidad
         """
         try:
-            if signals_df.empty:
+            odds1 = match['player1_odds']
+            odds2 = match['player2_odds']
+            
+            # Calcular probabilidades implícitas
+            prob1 = 1 / odds1
+            prob2 = 1 / odds2
+            
+            # Verificar si hay arbitraje (probabilidades suman menos de 1)
+            total_prob = prob1 + prob2
+            
+            if total_prob < 0.98:  # Margen mínimo del 2%
+                # Calcular stakes óptimos para arbitraje
+                stake1 = 1 / (odds1 * total_prob)
+                stake2 = 1 / (odds2 * total_prob)
+                
+                # Calcular ganancia garantizada
+                guaranteed_profit = 1 - total_prob
+                
+                signal = {
+                    'match_id': match.get('match_id', f"{match['player1']}_{match['player2']}"),
+                    'tournament': match['tournament'],
+                    'player1': match['player1'],
+                    'player2': match['player2'],
+                    'match_time': match.get('match_time'),
+                    'surface': match.get('surface', 'hard'),
+                    'round': match.get('round', 'Ronda'),
+                    'recommended_bet': 'arbitrage',
+                    'player_name': 'Arbitraje',
+                    'odds': [odds1, odds2],
+                    'implied_probability': [prob1, prob2],
+                    'expected_value': guaranteed_profit,
+                    'kelly_criterion': 0.0,
+                    'recommended_stake': [stake1, stake2],
+                    'confidence_score': 0.95,  # Arbitraje tiene alta confianza
+                    'confidence_level': 'high',
+                    'signal_type': 'arbitrage',
+                    'guaranteed_profit': guaranteed_profit,
+                    'generated_at': datetime.utcnow(),
+                    'match_data': match
+                }
+                
+                return signal
+            
+            return None
+            
+        except Exception as e:
+            self.logger.warning(f"Error verificando arbitraje: {e}")
+            return None
+    
+    def _calculate_confidence_score(
+        self, match: Dict[str, Any], ev: float, kelly: float, implied_prob: float
+    ) -> float:
+        """
+        Calcular puntuación de confianza para una señal.
+        
+        Args:
+            match: Datos del partido
+            ev: Valor esperado
+            kelly: Kelly Criterion
+            implied_prob: Probabilidad implícita
+            
+        Returns:
+            Puntuación de confianza (0-1)
+        """
+        try:
+            score = 0.0
+            
+            # Factor de valor esperado (40% del peso)
+            ev_score = min(ev / 0.20, 1.0)  # Normalizar a máximo 20%
+            score += ev_score * 0.4
+            
+            # Factor de Kelly Criterion (30% del peso)
+            kelly_score = min(kelly / 0.10, 1.0)  # Normalizar a máximo 10%
+            score += kelly_score * 0.3
+            
+            # Factor de probabilidad implícita (20% del peso)
+            # Preferir probabilidades moderadas (no extremas)
+            if 0.2 <= implied_prob <= 0.8:
+                prob_score = 1.0
+            else:
+                prob_score = 1.0 - abs(0.5 - implied_prob) * 2
+            
+            score += prob_score * 0.2
+            
+            # Factor de calidad del torneo (10% del peso)
+            tournament_weight = self.tournament_weights.get(
+                match.get('tournament_level', 'other'), 0.7
+            )
+            score += tournament_weight * 0.1
+            
+            return min(score, 1.0)
+            
+        except Exception as e:
+            self.logger.warning(f"Error calculando puntuación de confianza: {e}")
+            return 0.5
+    
+    def _determine_confidence_level(self, confidence_score: float) -> str:
+        """
+        Determinar nivel de confianza basado en la puntuación.
+        
+        Args:
+            confidence_score: Puntuación de confianza (0-1)
+            
+        Returns:
+            Nivel de confianza ('high', 'medium', 'low')
+        """
+        if confidence_score >= self.high_confidence_threshold:
+            return 'high'
+        elif confidence_score >= self.medium_confidence_threshold:
+            return 'medium'
+        else:
+            return 'low'
+    
+    def _rank_signals(self, signals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Ordenar señales por relevancia y confianza.
+        
+        Args:
+            signals: Lista de señales
+            
+        Returns:
+            Lista de señales ordenadas
+        """
+        try:
+            # Ordenar por confianza y valor esperado
+            ranked_signals = sorted(
+                signals,
+                key=lambda x: (x['confidence_score'], x['expected_value']),
+                reverse=True
+            )
+            
+            # Agregar ranking
+            for i, signal in enumerate(ranked_signals):
+                signal['rank'] = i + 1
+                signal['priority'] = 'high' if i < 5 else 'medium' if i < 15 else 'low'
+            
+            return ranked_signals
+            
+        except Exception as e:
+            self.logger.warning(f"Error ordenando señales: {e}")
+            return signals
+    
+    def filter_signals_by_criteria(
+        self, signals: List[Dict[str, Any]], 
+        min_confidence: str = 'low',
+        min_ev: float = 0.0,
+        max_stake: float = 1.0
+    ) -> List[Dict[str, Any]]:
+        """
+        Filtrar señales por criterios específicos.
+        
+        Args:
+            signals: Lista de señales
+            min_confidence: Confianza mínima ('low', 'medium', 'high')
+            min_ev: Valor esperado mínimo
+            max_stake: Stake máximo permitido
+            
+        Returns:
+            Lista de señales filtradas
+        """
+        try:
+            confidence_levels = {'low': 0, 'medium': 1, 'high': 2}
+            min_confidence_level = confidence_levels.get(min_confidence, 0)
+            
+            filtered_signals = []
+            
+            for signal in signals:
+                # Verificar nivel de confianza
+                signal_confidence = confidence_levels.get(signal['confidence_level'], 0)
+                if signal_confidence < min_confidence_level:
+                    continue
+                
+                # Verificar valor esperado
+                if signal['expected_value'] < min_ev:
+                    continue
+                
+                # Verificar stake máximo
+                if isinstance(signal['recommended_stake'], list):
+                    max_signal_stake = max(signal['recommended_stake'])
+                else:
+                    max_signal_stake = signal['recommended_stake']
+                
+                if max_signal_stake > max_stake:
+                    continue
+                
+                filtered_signals.append(signal)
+            
+            self.logger.info(f"Señales filtradas: {len(filtered_signals)} de {len(signals)}")
+            return filtered_signals
+            
+        except Exception as e:
+            self.logger.warning(f"Error filtrando señales: {e}")
+            return signals
+    
+    def generate_signals_summary(self, signals: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Generar resumen de las señales.
+        
+        Args:
+            signals: Lista de señales
+            
+        Returns:
+            Resumen de señales
+        """
+        try:
+            if not signals:
                 return {
                     'total_signals': 0,
-                    'total_stake': 0.0,
-                    'avg_ev': 0.0,
-                    'max_stake': 0.0,
-                    'portfolio_risk': 0.0
+                    'high_confidence': 0,
+                    'medium_confidence': 0,
+                    'low_confidence': 0,
+                    'total_ev': 0.0,
+                    'average_ev': 0.0,
+                    'arbitrage_opportunities': 0,
+                    'value_bets': 0
                 }
             
-            metrics = {
-                'total_signals': len(signals_df),
-                'total_stake': signals_df['recommended_stake'].sum(),
-                'avg_ev': signals_df['ev'].mean(),
-                'max_stake': signals_df['recommended_stake'].max(),
-                'portfolio_risk': (signals_df['recommended_stake'] / self.bankroll).sum()
+            # Contar por nivel de confianza
+            confidence_counts = {
+                'high': len([s for s in signals if s['confidence_level'] == 'high']),
+                'medium': len([s for s in signals if s['confidence_level'] == 'medium']),
+                'low': len([s for s in signals if s['confidence_level'] == 'low'])
             }
             
-            # Agregar métricas adicionales
-            metrics['avg_odds'] = signals_df['odds'].mean()
-            metrics['avg_model_prob'] = signals_df['model_prob'].mean()
-            metrics['stake_percentage'] = (metrics['total_stake'] / self.bankroll) * 100
+            # Calcular estadísticas de valor esperado
+            ev_values = [s['expected_value'] for s in signals if s['signal_type'] == 'value_bet']
+            total_ev = sum(ev_values) if ev_values else 0.0
+            average_ev = total_ev / len(ev_values) if ev_values else 0.0
             
-            self.logger.info(f"Métricas del portafolio calculadas: {metrics['total_signals']} señales")
-            return metrics
+            # Contar tipos de señales
+            arbitrage_count = len([s for s in signals if s['signal_type'] == 'arbitrage'])
+            value_bet_count = len([s for s in signals if s['signal_type'] == 'value_bet'])
+            
+            summary = {
+                'total_signals': len(signals),
+                'high_confidence': confidence_counts['high'],
+                'medium_confidence': confidence_counts['medium'],
+                'low_confidence': confidence_counts['low'],
+                'total_ev': round(total_ev, 4),
+                'average_ev': round(average_ev, 4),
+                'arbitrage_opportunities': arbitrage_count,
+                'value_bets': value_bet_count,
+                'generated_at': datetime.utcnow().isoformat()
+            }
+            
+            return summary
             
         except Exception as e:
-            self.logger.error(f"Error calculando métricas del portafolio: {e}")
-            raise
+            self.logger.warning(f"Error generando resumen: {e}")
+            return {}
     
-    def generate_betting_recommendations(self, df: pd.DataFrame, 
-                                       model_column: str = 'model_prob',
-                                       min_confidence: float = 0.7) -> Dict:
+    def run_signal_generation(self, matches: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
-        Generar recomendaciones completas de apuestas.
+        Ejecutar generación completa de señales.
         
         Args:
-            df: DataFrame con datos de partidos
-            model_column: Nombre de la columna con probabilidades del modelo
-            min_confidence: Confianza mínima requerida
+            matches: Lista de partidos procesados
             
         Returns:
-            Diccionario con señales y métricas del portafolio
+            Tupla con (señales, resumen)
         """
         try:
-            self.logger.info("Generando recomendaciones de apuestas")
+            self.logger.info("Iniciando generación de señales de apuestas")
             
-            # Detectar value bets
-            signals = self.detect_value_bets(df, model_column)
+            # Generar señales
+            signals = self.generate_betting_signals(matches)
             
-            if signals.empty:
-                return {
-                    'signals': pd.DataFrame(),
-                    'portfolio_metrics': self.calculate_portfolio_metrics(signals),
-                    'recommendations': []
-                }
+            # Enviar alertas para señales de alta confianza
+            self._send_alerts_for_signals(signals)
             
-            # Filtrar por confianza
-            high_confidence_signals = self.filter_signals_by_confidence(signals, min_confidence)
+            # Generar resumen
+            summary = self.generate_signals_summary(signals)
             
-            # Calcular métricas del portafolio
-            portfolio_metrics = self.calculate_portfolio_metrics(high_confidence_signals)
+            self.logger.info(f"Generación de señales completada: {len(signals)} señales generadas")
             
-            # Generar recomendaciones
-            recommendations = []
-            for _, signal in high_confidence_signals.iterrows():
-                rec = {
-                    'action': 'APOSTAR',
-                    'match': f"{signal['selection']} vs {signal['opponent']}",
-                    'tournament': signal['tournament'],
-                    'selection': signal['selection'],
-                    'odds': signal['odds'],
-                    'stake': f"${signal['recommended_stake']:.2f}",
-                    'ev': f"{signal['ev']:.1%}",
-                    'confidence': f"{signal['confidence']:.1%}"
-                }
-                recommendations.append(rec)
-            
-            result = {
-                'signals': high_confidence_signals,
-                'portfolio_metrics': portfolio_metrics,
-                'recommendations': recommendations
-            }
-            
-            self.logger.info(f"Recomendaciones generadas: {len(recommendations)} apuestas recomendadas")
-            return result
+            return signals, summary
             
         except Exception as e:
-            self.logger.error(f"Error generando recomendaciones: {e}")
-            raise
+            self.logger.error(f"Error en generación de señales: {e}")
+            return [], {}
     
-    def save_signals(self, signals_df: pd.DataFrame, filepath: str) -> None:
+    def _send_alerts_for_signals(self, signals: List[Dict[str, Any]]):
         """
-        Guardar señales de apuesta en archivo.
+        Enviar alertas para señales generadas.
         
         Args:
-            signals_df: DataFrame con señales
-            filepath: Ruta del archivo donde guardar
+            signals: Lista de señales de apuestas
         """
         try:
-            signals_df.to_csv(filepath, index=False)
-            self.logger.info(f"Señales guardadas en: {filepath}")
+            # Filtrar señales de alta confianza para alertas
+            high_confidence_signals = [
+                s for s in signals 
+                if s['confidence_level'] == 'high' and s['signal_type'] == 'value_bet'
+            ]
+            
+            for signal in high_confidence_signals:
+                try:
+                    # Preparar datos para la alerta
+                    alert_data = {
+                        'player_name': signal['player_name'],
+                        'player2': signal['player2'],
+                        'tournament': signal['tournament'],
+                        'surface': signal['surface'],
+                        'round': signal['round'],
+                        'odds': signal['odds'],
+                        'model_probability': signal.get('model_probability', 0),
+                        'implied_probability': signal['implied_probability'],
+                        'expected_value': signal['expected_value'],
+                        'kelly_stake': signal['kelly_criterion'],
+                        'recommended_stake': signal['recommended_stake'],
+                        'confidence_level': signal['confidence_level']
+                    }
+                    
+                    # Enviar alerta
+                    success = send_value_bet_alert(alert_data)
+                    
+                    if success:
+                        self.logger.info(f"Alerta enviada para value bet: {signal['player_name']}")
+                    else:
+                        self.logger.warning(f"Error enviando alerta para: {signal['player_name']}")
+                        
+                except Exception as e:
+                    self.logger.error(f"Error enviando alerta individual: {e}")
+                    continue
+                    
         except Exception as e:
-            self.logger.error(f"Error guardando señales: {e}")
-            raise
+            self.logger.error(f"Error en sistema de alertas: {e}")
 
 # Función de conveniencia para uso directo
-def detect_tennis_signals(df: pd.DataFrame, 
-                         model_column: str = 'model_prob',
-                         bankroll: float = None) -> Dict:
+def generate_tennis_betting_signals(matches: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
-    Función de conveniencia para detectar señales de tenis.
+    Generar señales de apuestas para tenis usando el sistema completo.
     
     Args:
-        df: DataFrame con datos de partidos
-        model_column: Columna con probabilidades del modelo
-        bankroll: Capital disponible
+        matches: Lista de partidos procesados
         
     Returns:
-        Diccionario con señales y recomendaciones
+        Tupla con (señales, resumen)
     """
-    detector = BettingSignalDetector(bankroll=bankroll)
-    return detector.generate_betting_recommendations(df, model_column)
+    signal_generator = TennisBettingSignals()
+    return signal_generator.run_signal_generation(matches)
+
+if __name__ == "__main__":
+    # Ejecutar generación de señales si se llama directamente
+    from data_ingest import run_tennis_data_ingestion
+    from data_clean import clean_tennis_data
+    
+    # Obtener y limpiar datos
+    matches = run_tennis_data_ingestion()
+    cleaned_matches = clean_tennis_data(matches)
+    
+    # Generar señales
+    signals, summary = generate_tennis_betting_signals(cleaned_matches)
+    
+    print(f"✅ Señales generadas: {len(signals)} oportunidades identificadas")
+    print(f"📊 Resumen: {summary}")
 

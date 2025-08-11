@@ -1,0 +1,170 @@
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Apuestas de Tenis</title>
+    <script src="https://cdn.socket.io/4.0.1/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 20px; }
+        .stat-card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .stat-value { font-size: 2em; font-weight: bold; color: #667eea; }
+        .signals-section { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .signal-item { border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 5px; }
+        .high-confidence { border-left: 5px solid #28a745; }
+        .medium-confidence { border-left: 5px solid #ffc107; }
+        .low-confidence { border-left: 5px solid #dc3545; }
+        .refresh-btn { background: #667eea; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; }
+        .refresh-btn:hover { background: #5a6fd8; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎾 Sistema de Apuestas de Tenis</h1>
+            <p>Dashboard en tiempo real para análisis de apuestas deportivas</p>
+        </div>
+        
+        <button class="refresh-btn" onclick="refreshData()">🔄 Actualizar Datos</button>
+        
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>Total de Señales</h3>
+                <div class="stat-value" id="total-signals">-</div>
+            </div>
+            <div class="stat-card">
+                <h3>Alta Confianza</h3>
+                <div class="stat-value" id="high-confidence">-</div>
+            </div>
+            <div class="stat-card">
+                <h3>Valor Esperado Promedio</h3>
+                <div class="stat-value" id="avg-ev">-</div>
+            </div>
+            <div class="stat-card">
+                <h3>Última Actualización</h3>
+                <div class="stat-value" id="last-update">-</div>
+            </div>
+        </div>
+        
+        <div class="signals-section">
+            <h2>📊 Señales de Apuestas</h2>
+            <div id="signals-container">
+                <p>Cargando señales...</p>
+            </div>
+        </div>
+        
+        <div class="signals-section">
+            <h2>🎯 Partidos Próximos</h2>
+            <div id="matches-container">
+                <p>Cargando partidos...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Conectar WebSocket
+        const socket = io();
+        
+        socket.on('connect', function() {
+            console.log('Conectado al servidor');
+        });
+        
+        socket.on('dashboard_update', function(data) {
+            updateDashboard(data);
+        });
+        
+        // Cargar datos iniciales
+        loadDashboardData();
+        
+        function loadDashboardData() {
+            fetch('/api/dashboard-data')
+                .then(response => response.json())
+                .then(data => updateDashboard(data))
+                .catch(error => console.error('Error:', error));
+        }
+        
+        function updateDashboard(data) {
+            // Actualizar estadísticas
+            document.getElementById('total-signals').textContent = data.metrics.total_signals || 0;
+            document.getElementById('high-confidence').textContent = data.metrics.high_confidence || 0;
+            document.getElementById('avg-ev').textContent = (data.metrics.average_ev || 0).toFixed(3);
+            document.getElementById('last-update').textContent = new Date(data.last_update).toLocaleTimeString();
+            
+            // Actualizar señales
+            updateSignals(data.signals);
+            
+            // Actualizar partidos
+            updateMatches(data.matches);
+        }
+        
+        function updateSignals(signals) {
+            const container = document.getElementById('signals-container');
+            
+            if (!signals || signals.length === 0) {
+                container.innerHTML = '<p>No hay señales disponibles</p>';
+                return;
+            }
+            
+            let html = '';
+            signals.forEach(signal => {
+                const confidenceClass = signal.confidence_level + '-confidence';
+                html += `
+                    <div class="signal-item ${confidenceClass}">
+                        <h4>${signal.player_name} vs ${signal.player2 || 'Oponente'}</h4>
+                        <p><strong>Tournament:</strong> ${signal.tournament}</p>
+                        <p><strong>Odds:</strong> ${signal.odds}</p>
+                        <p><strong>Valor Esperado:</strong> ${(signal.expected_value * 100).toFixed(2)}%</p>
+                        <p><strong>Confianza:</strong> ${signal.confidence_level}</p>
+                    </div>
+                `;
+            });
+            
+            container.innerHTML = html;
+        }
+        
+        function updateMatches(matches) {
+            const container = document.getElementById('matches-container');
+            
+            if (!matches || matches.length === 0) {
+                container.innerHTML = '<p>No hay partidos disponibles</p>';
+                return;
+            }
+            
+            let html = '';
+            matches.forEach(match => {
+                const matchTime = new Date(match.match_time).toLocaleString();
+                html += `
+                    <div class="signal-item">
+                        <h4>${match.player1} vs ${match.player2}</h4>
+                        <p><strong>Tournament:</strong> ${match.tournament}</p>
+                        <p><strong>Surface:</strong> ${match.surface}</p>
+                        <p><strong>Round:</strong> ${match.round}</p>
+                        <p><strong>Match Time:</strong> ${matchTime}</p>
+                    </div>
+                `;
+            });
+            
+            container.innerHTML = html;
+        }
+        
+        function refreshData() {
+            fetch('/api/refresh')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        loadDashboardData();
+                    }
+                })
+                .catch(error => console.error('Error:', error));
+        }
+        
+        // Actualizar datos cada 30 segundos
+        setInterval(loadDashboardData, 30000);
+    </script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Error - Sistema de Apuestas de Tenis</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }
+        .container { max-width: 600px; margin: 0 auto; text-align: center; }
+        .error-card { background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .error-icon { font-size: 4em; color: #dc3545; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="error-card">
+            <div class="error-icon">⚠️</div>
+            <h1>Error del Sistema</h1>
+            <p>Ha ocurrido un error en el sistema:</p>
+            <p><strong>{{ error }}</strong></p>
+            <p>Por favor, intente nuevamente más tarde.</p>
+            <a href="/" style="background: #667eea; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Volver al Inicio</a>
+        </div>
+    </div>
+</body>
+</html>

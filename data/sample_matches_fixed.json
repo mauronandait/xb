@@ -1,0 +1,87 @@
+[
+  {
+    "external_id": "djokovic_nadal_australian_open_2024",
+    "tournament_name": "Australian Open 2024",
+    "player1_name": "Novak Djokovic",
+    "player2_name": "Rafael Nadal",
+    "match_date": "2024-12-01T15:00:00",
+    "surface": "hard",
+    "round": "Quarter Final",
+    "best_of": 5,
+    "source": "sample_data",
+    "raw_data": {
+      "odds": [1.85, 2.10],
+      "tournament_level": "grand_slam",
+      "player1_rank": 1,
+      "player2_rank": 2
+    }
+  },
+  {
+    "external_id": "federer_medvedev_wimbledon_2024",
+    "tournament_name": "Wimbledon 2024",
+    "player1_name": "Roger Federer",
+    "player2_name": "Daniil Medvedev",
+    "match_date": "2024-12-02T14:00:00",
+    "surface": "grass",
+    "round": "Semi Final",
+    "best_of": 5,
+    "source": "sample_data",
+    "raw_data": {
+      "odds": [2.50, 1.60],
+      "tournament_level": "grand_slam",
+      "player1_rank": 5,
+      "player2_rank": 3
+    }
+  },
+  {
+    "external_id": "alcaraz_sinner_us_open_2024",
+    "tournament_name": "US Open 2024",
+    "player1_name": "Carlos Alcaraz",
+    "player2_name": "Jannik Sinner",
+    "match_date": "2024-12-03T16:00:00",
+    "surface": "hard",
+    "round": "Final",
+    "best_of": 5,
+    "source": "sample_data",
+    "raw_data": {
+      "odds": [1.75, 2.25],
+      "tournament_level": "grand_slam",
+      "player1_rank": 2,
+      "player2_rank": 4
+    }
+  },
+  {
+    "external_id": "tsitsipas_zverev_french_open_2024",
+    "tournament_name": "French Open 2024",
+    "player1_name": "Stefanos Tsitsipas",
+    "player2_name": "Alexander Zverev",
+    "match_date": "2024-12-04T13:00:00",
+    "surface": "clay",
+    "round": "Quarter Final",
+    "best_of": 5,
+    "source": "sample_data",
+    "raw_data": {
+      "odds": [2.15, 1.80],
+      "tournament_level": "grand_slam",
+      "player1_rank": 6,
+      "player2_rank": 7
+    }
+  },
+  {
+    "external_id": "rublev_khachanov_miami_open_2024",
+    "tournament_name": "Miami Open 2024",
+    "player1_name": "Andrey Rublev",
+    "player2_name": "Karen Khachanov",
+    "match_date": "2024-12-05T17:00:00",
+    "surface": "hard",
+    "round": "Round of 16",
+    "best_of": 3,
+    "source": "sample_data",
+    "raw_data": {
+      "odds": [1.95, 1.90],
+      "tournament_level": "masters_1000",
+      "player1_rank": 8,
+      "player2_rank": 9
+    }
+  }
+]

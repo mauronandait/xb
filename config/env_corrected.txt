@@ -1,0 +1,37 @@
+# Database Configuration
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=tennis_betting
+DB_USER=postgres
+DB_PASSWORD=postgres123
+
+# 1xBet Configuration
+ONEXBET_API_URL=https://1xbet.com/api
+ONEXBET_API_KEY=
+
+# Scraping Configuration (fallback if no API)
+SCRAPING_ENABLED=true
+SCRAPING_DELAY=2
+USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
+
+# Betting Configuration
+BANKROLL=10000
+KELLY_FRACTION=0.5
+MAX_STAKE_PERCENT=5
+MIN_EV_THRESHOLD=0.05
+
+# Alert Configuration
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+EMAIL_SMTP_SERVER=smtp.gmail.com
+EMAIL_SMTP_PORT=587
+EMAIL_USER=
+EMAIL_PASSWORD=
+
+# Logging Configuration
+LOG_LEVEL=INFO
+LOG_FILE=logs/tennis_betting.log
+
+# Model Configuration
+MODEL_UPDATE_FREQUENCY=3600
+HISTORICAL_DATA_DAYS=365

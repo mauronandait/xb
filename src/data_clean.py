@@ -1,297 +1,485 @@
+#!/usr/bin/env python3
 """
-Módulo de limpieza y procesamiento de datos para el sistema de apuestas de tenis.
-Incluye funciones para limpiar datos crudos, calcular estadísticas y preparar datos para ML.
+Sistema de limpieza y preprocesamiento de datos para el sistema de apuestas de tenis.
+Normaliza datos, calcula probabilidades y agrega características estadísticas.
 """
 
+import logging
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Optional, Tuple
-import logging
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
-from src.config import config
+import re
 
+from config import config
+from database import db_manager
+
+# Configurar logging
 logger = logging.getLogger(__name__)
 
 class TennisDataCleaner:
-    """Clase para limpiar y procesar datos de tenis."""
+    """Sistema de limpieza y preprocesamiento de datos de tenis."""
     
     def __init__(self):
-        """Inicializar el limpiador de datos."""
+        """Inicializar limpiador de datos."""
         self.logger = logging.getLogger(__name__)
-        
-    def clean_match_data(self, raw_data: List[Dict]) -> pd.DataFrame:
+        self.min_odds_threshold = 1.01
+        self.max_odds_threshold = 100.0
+        self.min_probability_threshold = 0.001
+        self.max_probability_threshold = 0.999
+    
+    def clean_matches_data(self, matches: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Limpiar datos crudos de partidos de tenis.
+        Limpiar y validar datos de partidos.
         
         Args:
-            raw_data: Lista de diccionarios con datos crudos
+            matches: Lista de partidos crudos
             
         Returns:
-            DataFrame limpio con datos procesados
+            Lista de partidos limpios y validados
         """
-        try:
-            df = pd.DataFrame(raw_data)
-            
-            # Limpiar nombres de columnas
-            df.columns = df.columns.str.lower().str.replace(' ', '_')
-            
-            # Convertir fechas
-            if 'match_time' in df.columns:
-                df['match_time'] = pd.to_datetime(df['match_time'], errors='coerce')
-            
-            # Limpiar nombres de jugadores
-            if 'player1' in df.columns:
-                df['player1'] = df['player1'].str.strip()
-            if 'player2' in df.columns:
-                df['player2'] = df['player2'].str.strip()
-            
-            # Limpiar cuotas
-            odds_columns = [col for col in df.columns if 'odds' in col]
-            for col in odds_columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-                # Filtrar cuotas válidas (entre 1.01 y 1000)
-                df[col] = df[col].clip(1.01, 1000)
-            
-            # Limpiar torneos
-            if 'tournament' in df.columns:
-                df['tournament'] = df['tournament'].str.strip()
-            
-            # Eliminar filas con datos faltantes críticos
-            critical_columns = ['player1', 'player2', 'match_time']
-            df = df.dropna(subset=critical_columns)
-            
-            # Generar ID único para cada partido
-            df['match_id'] = df.apply(
-                lambda row: f"{row['player1']}_{row['player2']}_{row['tournament']}_{row['match_time'].strftime('%Y%m%d')}",
-                axis=1
-            )
-            
-            self.logger.info(f"Datos limpios: {len(df)} partidos procesados")
-            return df
-            
-        except Exception as e:
-            self.logger.error(f"Error limpiando datos: {e}")
-            raise
+        if not matches:
+            self.logger.warning("No hay partidos para limpiar")
+            return []
+        
+        self.logger.info(f"Iniciando limpieza de {len(matches)} partidos")
+        
+        cleaned_matches = []
+        
+        for match in matches:
+            try:
+                cleaned_match = self._clean_single_match(match)
+                if cleaned_match:
+                    cleaned_matches.append(cleaned_match)
+            except Exception as e:
+                self.logger.warning(f"Error limpiando partido: {e}")
+                continue
+        
+        self.logger.info(f"Limpieza completada: {len(cleaned_matches)} partidos válidos")
+        return cleaned_matches
     
-    def calculate_implied_probabilities(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _clean_single_match(self, match: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Calcular probabilidades implícitas a partir de las cuotas.
+        Limpiar un partido individual.
         
         Args:
-            df: DataFrame con datos de partidos
+            match: Datos del partido
             
         Returns:
-            DataFrame con probabilidades implícitas calculadas
+            Partido limpio o None si no es válido
         """
         try:
-            df = df.copy()
+            # Validar campos obligatorios
+            required_fields = ['tournament', 'player1', 'player2']
+            for field in required_fields:
+                if not match.get(field) or not str(match[field]).strip():
+                    return None
             
-            # Calcular probabilidades implícitas
-            if 'player1_odds' in df.columns and 'player2_odds' in df.columns:
-                df['player1_implied_prob'] = 1 / df['player1_odds']
-                df['player2_implied_prob'] = 1 / df['player2_odds']
-                
-                # Calcular margen de la casa de apuestas
-                df['margin'] = (df['player1_implied_prob'] + df['player2_implied_prob']) - 1
-                
-                # Normalizar probabilidades (eliminar margen)
-                df['player1_prob'] = df['player1_implied_prob'] / (1 + df['margin'])
-                df['player2_prob'] = df['player2_implied_prob'] / (1 + df['margin'])
-                
-                # Verificar que las probabilidades sumen 1
-                df['prob_sum'] = df['player1_prob'] + df['player2_prob']
-                
-            self.logger.info("Probabilidades implícitas calculadas")
-            return df
+            # Limpiar y normalizar texto
+            cleaned_match = {
+                'tournament': self._clean_text(match['tournament']),
+                'player1': self._clean_text(match['player1']),
+                'player2': self._clean_text(match['player2']),
+                'match_time': self._clean_datetime(match.get('match_time')),
+                'surface': self._clean_surface(match.get('surface')),
+                'round': self._clean_text(match.get('round', 'Ronda')),
+                'status': self._clean_status(match.get('status', 'scheduled')),
+                'raw_data': match.get('raw_data', {})
+            }
+            
+            # Validar y limpiar cuotas
+            if 'odds' in match and match['odds']:
+                cleaned_odds = self._clean_odds(match['odds'])
+                if cleaned_odds:
+                    cleaned_match['odds'] = cleaned_odds
+                    cleaned_match['player1_odds'] = cleaned_odds[0]
+                    cleaned_match['player2_odds'] = cleaned_odds[1]
+                else:
+                    # Si no hay cuotas válidas, usar valores por defecto
+                    cleaned_match['odds'] = [2.0, 2.0]
+                    cleaned_match['player1_odds'] = 2.0
+                    cleaned_match['player2_odds'] = 2.0
+            else:
+                # Valores por defecto si no hay cuotas
+                cleaned_match['odds'] = [2.0, 2.0]
+                cleaned_match['player1_odds'] = 2.0
+                cleaned_match['player2_odds'] = 2.0
+            
+            # Agregar timestamp de limpieza
+            cleaned_match['cleaned_at'] = datetime.utcnow()
+            
+            return cleaned_match
             
         except Exception as e:
-            self.logger.error(f"Error calculando probabilidades: {e}")
-            raise
+            self.logger.warning(f"Error limpiando partido individual: {e}")
+            return None
     
-    def add_statistical_features(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _clean_text(self, text: Any) -> str:
+        """Limpiar y normalizar texto."""
+        if not text:
+            return ""
+        
+        # Convertir a string y limpiar
+        text = str(text).strip()
+        
+        # Remover caracteres especiales problemáticos
+        text = re.sub(r'[^\w\s\-\.]', '', text)
+        
+        # Normalizar espacios
+        text = re.sub(r'\s+', ' ', text)
+        
+        return text
+    
+    def _clean_datetime(self, dt: Any) -> Optional[datetime]:
+        """Limpiar y validar datetime."""
+        if not dt:
+            return None
+        
+        try:
+            if isinstance(dt, datetime):
+                return dt
+            elif isinstance(dt, str):
+                # Intentar parsear diferentes formatos
+                formats = [
+                    '%Y-%m-%d %H:%M:%S',
+                    '%Y-%m-%d %H:%M',
+                    '%Y-%m-%d',
+                    '%d/%m/%Y %H:%M',
+                    '%d/%m/%Y'
+                ]
+                
+                for fmt in formats:
+                    try:
+                        return datetime.strptime(dt, fmt)
+                    except ValueError:
+                        continue
+                
+                # Si no funciona, usar fecha actual
+                return datetime.now()
+            else:
+                return datetime.now()
+                
+        except Exception as e:
+            self.logger.warning(f"Error limpiando datetime: {e}")
+            return datetime.now()
+    
+    def _clean_surface(self, surface: Any) -> str:
+        """Limpiar y normalizar superficie."""
+        if not surface:
+            return 'hard'
+        
+        surface = str(surface).lower().strip()
+        
+        # Mapear variaciones a valores estándar
+        surface_mapping = {
+            'hard': 'hard',
+            'clay': 'clay',
+            'grass': 'grass',
+            'carpet': 'carpet',
+            'indoor': 'hard',
+            'outdoor': 'hard',
+            'cement': 'hard',
+            'concrete': 'hard',
+            'synthetic': 'hard'
+        }
+        
+        return surface_mapping.get(surface, 'hard')
+    
+    def _clean_status(self, status: Any) -> str:
+        """Limpiar y normalizar estado del partido."""
+        if not status:
+            return 'scheduled'
+        
+        status = str(status).lower().strip()
+        
+        # Mapear variaciones a valores estándar
+        status_mapping = {
+            'scheduled': 'scheduled',
+            'live': 'live',
+            'finished': 'finished',
+            'cancelled': 'cancelled',
+            'postponed': 'postponed',
+            'suspended': 'suspended'
+        }
+        
+        return status_mapping.get(status, 'scheduled')
+    
+    def _clean_odds(self, odds: List[Any]) -> Optional[List[float]]:
         """
-        Agregar características estadísticas básicas.
+        Limpiar y validar cuotas.
         
         Args:
-            df: DataFrame con datos de partidos
+            odds: Lista de cuotas
             
         Returns:
-            DataFrame con características adicionales
+            Lista de cuotas limpias o None si no son válidas
         """
+        if not odds or len(odds) < 2:
+            return None
+        
         try:
-            df = df.copy()
+            cleaned_odds = []
             
-            # Agregar características temporales
-            if 'match_time' in df.columns:
-                df['hour'] = df['match_time'].dt.hour
-                df['day_of_week'] = df['match_time'].dt.dayofweek
-                df['month'] = df['match_time'].dt.month
-                df['is_weekend'] = df['day_of_week'].isin([5, 6]).astype(int)
+            for odd in odds[:2]:  # Solo primeras 2 cuotas
+                if odd is None:
+                    cleaned_odds.append(2.0)
+                    continue
+                
+                try:
+                    odd_value = float(odd)
+                    
+                    # Validar rango de cuotas
+                    if odd_value < self.min_odds_threshold or odd_value > self.max_odds_threshold:
+                        self.logger.warning(f"Cuota fuera de rango válido: {odd_value}")
+                        cleaned_odds.append(2.0)
+                    else:
+                        cleaned_odds.append(round(odd_value, 2))
+                        
+                except (ValueError, TypeError):
+                    self.logger.warning(f"Cuota no válida: {odd}")
+                    cleaned_odds.append(2.0)
             
-            # Agregar características de cuotas
-            if 'player1_odds' in df.columns and 'player2_odds' in df.columns:
-                df['odds_ratio'] = df['player1_odds'] / df['player2_odds']
-                df['odds_difference'] = df['player1_odds'] - df['player2_odds']
-                df['is_favorite'] = (df['player1_odds'] < df['player2_odds']).astype(int)
-            
-            # Agregar características de probabilidades
-            if 'player1_prob' in df.columns and 'player2_prob' in df.columns:
-                df['prob_difference'] = df['player1_prob'] - df['player2_prob']
-                df['prob_ratio'] = df['player1_prob'] / df['player2_prob']
-            
-            self.logger.info("Características estadísticas agregadas")
-            return df
-            
+            # Verificar que tengamos 2 cuotas válidas
+            if len(cleaned_odds) == 2:
+                return cleaned_odds
+            else:
+                return None
+                
         except Exception as e:
-            self.logger.error(f"Error agregando características: {e}")
-            raise
+            self.logger.warning(f"Error limpiando cuotas: {e}")
+            return None
     
-    def filter_valid_matches(self, df: pd.DataFrame) -> pd.DataFrame:
+    def calculate_implied_probabilities(self, matches: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Calcular probabilidades implícitas para todos los partidos.
+        
+        Args:
+            matches: Lista de partidos limpios
+            
+        Returns:
+            Lista de partidos con probabilidades calculadas
+        """
+        self.logger.info("Calculando probabilidades implícitas")
+        
+        for match in matches:
+            try:
+                if 'odds' in match and len(match['odds']) >= 2:
+                    odds1, odds2 = match['odds'][0], match['odds'][1]
+                    
+                    # Calcular probabilidades implícitas
+                    prob1 = 1 / odds1
+                    prob2 = 1 / odds2
+                    
+                    # Calcular margen del bookmaker
+                    total_prob = prob1 + prob2
+                    margin = total_prob - 1
+                    
+                    # Ajustar probabilidades por el margen
+                    if margin > 0:
+                        prob1_adjusted = prob1 / total_prob
+                        prob2_adjusted = prob2 / total_prob
+                    else:
+                        prob1_adjusted = prob1
+                        prob2_adjusted = prob2
+                    
+                    # Agregar probabilidades al partido
+                    match['player1_implied_prob'] = round(prob1_adjusted, 4)
+                    match['player2_implied_prob'] = round(prob2_adjusted, 4)
+                    match['total_prob'] = round(total_prob, 4)
+                    match['margin'] = round(margin, 4)
+                    
+                    # Validar probabilidades
+                    if (prob1_adjusted < self.min_probability_threshold or 
+                        prob1_adjusted > self.max_probability_threshold or
+                        prob2_adjusted < self.min_probability_threshold or 
+                        prob2_adjusted > self.max_probability_threshold):
+                        self.logger.warning(f"Probabilidades fuera de rango válido: {prob1_adjusted}, {prob2_adjusted}")
+                        match['valid_probabilities'] = False
+                    else:
+                        match['valid_probabilities'] = True
+                        
+            except Exception as e:
+                self.logger.warning(f"Error calculando probabilidades para partido: {e}")
+                match['valid_probabilities'] = False
+        
+        self.logger.info("Probabilidades implícitas calculadas")
+        return matches
+    
+    def add_statistical_features(self, matches: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Agregar características estadísticas a los partidos.
+        
+        Args:
+            matches: Lista de partidos con probabilidades
+            
+        Returns:
+            Lista de partidos con características agregadas
+        """
+        self.logger.info("Agregando características estadísticas")
+        
+        for match in matches:
+            try:
+                # Calcular valor esperado (EV)
+                if 'player1_implied_prob' in match and 'player1_odds' in match:
+                    ev1 = (match['player1_implied_prob'] * (match['player1_odds'] - 1)) - (1 - match['player1_implied_prob'])
+                    match['player1_ev'] = round(ev1, 4)
+                
+                if 'player2_implied_prob' in match and 'player2_odds' in match:
+                    ev2 = (match['player2_implied_prob'] * (match['player2_odds'] - 1)) - (1 - match['player2_implied_prob'])
+                    match['player2_ev'] = round(ev2, 4)
+                
+                # Calcular Kelly Criterion
+                if 'player1_ev' in match and match['player1_ev'] > 0:
+                    kelly1 = match['player1_ev'] / (match['player1_odds'] - 1)
+                    match['player1_kelly'] = round(kelly1, 4)
+                else:
+                    match['player1_kelly'] = 0.0
+                
+                if 'player2_ev' in match and match['player2_ev'] > 0:
+                    kelly2 = match['player2_ev'] / (match['player2_odds'] - 1)
+                    match['player2_kelly'] = round(kelly2, 4)
+                else:
+                    match['player2_kelly'] = 0.0
+                
+                # Agregar características de torneo
+                match['tournament_level'] = self._classify_tournament_level(match.get('tournament', ''))
+                match['surface_type'] = match.get('surface', 'hard')
+                
+                # Agregar timestamp de procesamiento
+                match['processed_at'] = datetime.utcnow()
+                
+            except Exception as e:
+                self.logger.warning(f"Error agregando características para partido: {e}")
+                continue
+        
+        self.logger.info("Características estadísticas agregadas")
+        return matches
+    
+    def _classify_tournament_level(self, tournament_name: str) -> str:
+        """Clasificar nivel del torneo basado en el nombre."""
+        tournament_name = tournament_name.lower()
+        
+        if any(grand_slam in tournament_name for grand_slam in ['australian open', 'wimbledon', 'roland garros', 'us open']):
+            return 'grand_slam'
+        elif any(atp_1000 in tournament_name for atp_1000 in ['indian wells', 'miami', 'monte carlo', 'madrid', 'rome', 'canada', 'cincinnati', 'shanghai', 'paris']):
+            return 'atp_1000'
+        elif any(atp_500 in tournament_name for atp_500 in ['rotterdam', 'dubai', 'acapulco', 'barcelona', 'hamburg', 'washington', 'tokyo', 'basel', 'vienna']):
+            return 'atp_500'
+        elif any(atp_250 in tournament_name for atp_250 in ['doha', 'adelaide', 'auckland', 'sydney', 'marseille', 'rotterdam']):
+            return 'atp_250'
+        elif 'challenger' in tournament_name:
+            return 'challenger'
+        else:
+            return 'other'
+    
+    def filter_valid_matches(self, matches: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Filtrar partidos válidos para análisis.
         
         Args:
-            df: DataFrame con datos de partidos
+            matches: Lista de partidos procesados
             
         Returns:
-            DataFrame filtrado con solo partidos válidos
+            Lista de partidos válidos
         """
-        try:
-            df = df.copy()
-            
-            # Filtrar por cuotas válidas
-            if 'player1_odds' in df.columns and 'player2_odds' in df.columns:
-                df = df[
-                    (df['player1_odds'] >= 1.01) & 
-                    (df['player2_odds'] >= 1.01) &
-                    (df['player1_odds'] <= 1000) & 
-                    (df['player2_odds'] <= 1000)
-                ]
-            
-            # Filtrar por probabilidades válidas
-            if 'player1_prob' in df.columns and 'player2_prob' in df.columns:
-                df = df[
-                    (df['player1_prob'] > 0) & 
-                    (df['player2_prob'] > 0) &
-                    (df['player1_prob'] < 1) & 
-                    (df['player2_prob'] < 1)
-                ]
-            
-            # Filtrar por margen razonable
-            if 'margin' in df.columns:
-                df = df[df['margin'] <= 0.15]  # Máximo 15% de margen
-            
-            # Filtrar partidos futuros
-            if 'match_time' in df.columns:
-                df = df[df['match_time'] > datetime.now()]
-            
-            self.logger.info(f"Partidos válidos filtrados: {len(df)}")
-            return df
-            
-        except Exception as e:
-            self.logger.error(f"Error filtrando partidos: {e}")
-            raise
-    
-    def process_tournament_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Procesar datos específicos de torneos.
+        self.logger.info("Filtrando partidos válidos")
         
-        Args:
-            df: DataFrame con datos de partidos
-            
-        Returns:
-            DataFrame con información de torneos procesada
-        """
-        try:
-            df = df.copy()
-            
-            # Categorizar torneos por nivel
-            if 'tournament' in df.columns:
-                # Grand Slams
-                grand_slams = ['Australian Open', 'French Open', 'Wimbledon', 'US Open']
-                df['tournament_level'] = df['tournament'].apply(
-                    lambda x: 'Grand Slam' if x in grand_slams else 'Regular'
-                )
+        valid_matches = []
+        
+        for match in matches:
+            try:
+                # Verificar que tenga todos los campos necesarios
+                required_fields = [
+                    'tournament', 'player1', 'player2', 'odds', 
+                    'player1_implied_prob', 'player2_implied_prob'
+                ]
                 
-                # Categorizar por superficie (si está disponible)
-                # Esto se puede expandir con más información
-                df['surface_type'] = 'Unknown'  # Placeholder
-            
-            self.logger.info("Datos de torneos procesados")
-            return df
-            
-        except Exception as e:
-            self.logger.error(f"Error procesando torneos: {e}")
-            raise
+                if not all(field in match for field in required_fields):
+                    continue
+                
+                # Verificar que las probabilidades sean válidas
+                if not match.get('valid_probabilities', False):
+                    continue
+                
+                # Verificar que las cuotas estén en rango válido
+                odds1, odds2 = match['odds'][0], match['odds'][1]
+                if odds1 < self.min_odds_threshold or odds1 > self.max_odds_threshold or \
+                   odds2 < self.min_odds_threshold or odds2 > self.max_odds_threshold:
+                    continue
+                
+                # Verificar que el margen no sea excesivo
+                margin = match.get('margin', 0)
+                if margin > 0.15:  # Margen máximo del 15%
+                    continue
+                
+                valid_matches.append(match)
+                
+            except Exception as e:
+                self.logger.warning(f"Error validando partido: {e}")
+                continue
+        
+        self.logger.info(f"Partidos válidos filtrados: {len(valid_matches)}")
+        return valid_matches
     
-    def run_full_cleaning_pipeline(self, raw_data: List[Dict]) -> pd.DataFrame:
+    def run_cleaning_pipeline(self, matches: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Ejecutar el pipeline completo de limpieza de datos.
+        Ejecutar pipeline completo de limpieza.
         
         Args:
-            raw_data: Lista de diccionarios con datos crudos
+            matches: Lista de partidos crudos
             
         Returns:
-            DataFrame completamente procesado y listo para ML
+            Lista de partidos limpios y procesados
         """
+        self.logger.info("Iniciando pipeline de limpieza de datos")
+        
         try:
-            self.logger.info("Iniciando pipeline de limpieza de datos")
+            # Paso 1: Limpiar datos básicos
+            cleaned_matches = self.clean_matches_data(matches)
+            self.logger.info(f"Datos limpios: {len(cleaned_matches)} partidos procesados")
             
-            # Paso 1: Limpieza básica
-            df = self.clean_match_data(raw_data)
+            # Paso 2: Calcular probabilidades implícitas
+            matches_with_probs = self.calculate_implied_probabilities(cleaned_matches)
+            self.logger.info("Probabilidades implícitas calculadas")
             
-            # Paso 2: Calcular probabilidades
-            df = self.calculate_implied_probabilities(df)
+            # Paso 3: Agregar características estadísticas
+            matches_with_features = self.add_statistical_features(matches_with_probs)
+            self.logger.info("Características estadísticas agregadas")
             
-            # Paso 3: Agregar características
-            df = self.add_statistical_features(df)
+            # Paso 4: Filtrar partidos válidos
+            valid_matches = self.filter_valid_matches(matches_with_features)
+            self.logger.info(f"Partidos válidos filtrados: {len(valid_matches)}")
             
-            # Paso 4: Procesar torneos
-            df = self.process_tournament_data(df)
-            
-            # Paso 5: Filtrar partidos válidos
-            df = self.filter_valid_matches(df)
-            
-            # Paso 6: Ordenar por fecha
-            if 'match_time' in df.columns:
-                df = df.sort_values('match_time')
-            
-            # Paso 7: Resetear índice
-            df = df.reset_index(drop=True)
-            
-            self.logger.info(f"Pipeline de limpieza completado: {len(df)} partidos válidos")
-            return df
+            self.logger.info(f"Pipeline de limpieza completado: {len(valid_matches)} partidos válidos")
+            return valid_matches
             
         except Exception as e:
             self.logger.error(f"Error en pipeline de limpieza: {e}")
-            raise
-    
-    def save_cleaned_data(self, df: pd.DataFrame, filepath: str) -> None:
-        """
-        Guardar datos limpios en archivo.
-        
-        Args:
-            df: DataFrame con datos limpios
-            filepath: Ruta del archivo donde guardar
-        """
-        try:
-            df.to_csv(filepath, index=False)
-            self.logger.info(f"Datos guardados en: {filepath}")
-        except Exception as e:
-            self.logger.error(f"Error guardando datos: {e}")
-            raise
+            return []
 
 # Función de conveniencia para uso directo
-def clean_tennis_data(raw_data: List[Dict]) -> pd.DataFrame:
+def clean_tennis_data(matches: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Función de conveniencia para limpiar datos de tenis.
+    Limpiar datos de tenis usando el pipeline completo.
     
     Args:
-        raw_data: Lista de diccionarios con datos crudos
+        matches: Lista de partidos crudos
         
     Returns:
-        DataFrame limpio y procesado
+        Lista de partidos limpios y procesados
     """
     cleaner = TennisDataCleaner()
-    return cleaner.run_full_cleaning_pipeline(raw_data)
+    return cleaner.run_cleaning_pipeline(matches)
+
+if __name__ == "__main__":
+    # Ejecutar limpieza si se llama directamente
+    from data_ingest import run_tennis_data_ingestion
+    
+    # Obtener datos de ejemplo
+    matches = run_tennis_data_ingestion()
+    
+    # Limpiar datos
+    cleaned_matches = clean_tennis_data(matches)
+    
+    print(f"✅ Limpieza completada: {len(cleaned_matches)} partidos válidos")
 

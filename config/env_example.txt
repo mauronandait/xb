@@ -27,6 +27,9 @@ EMAIL_SMTP_SERVER=smtp.gmail.com
 EMAIL_SMTP_PORT=587
 EMAIL_USER=your_email@gmail.com
 EMAIL_PASSWORD=your_app_password
+EMAIL_RECIPIENTS=user1@example.com,user2@example.com
+ALERTS_EMAIL_ENABLED=true
+ALERTS_TELEGRAM_ENABLED=true
 
 # Configuración de Logging
 LOG_LEVEL=INFO

@@ -18,7 +18,7 @@ __version__ = "1.0.0"
 __author__ = "Sistema de Apuestas Deportivas"
 __description__ = "Sistema completo de automatización de apuestas para tenis"
 
-from .config import config
-from .data_ingest import TennisDataIngestor
+from config import config
+from data_ingest import TennisDataIngestor
 
 __all__ = ['config', 'TennisDataIngestor']
